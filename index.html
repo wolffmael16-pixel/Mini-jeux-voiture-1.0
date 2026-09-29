@@ -1,0 +1,1364 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Highway Mouse 3D</title>
+<style>
+  :root {
+    --bg: #0a0c12;
+    box-sizing: border-box;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #0a0c12; } }
+  :root[data-theme="dark"] { --bg: #0a0c12; }
+  html, body { height: 100%; margin: 0; background: var(--bg); overflow: hidden; }
+  body { display: flex; align-items: center; justify-content: center; }
+  #wrap { position: relative; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+  canvas {
+    background: #000;
+    max-width: 100%; max-height: 100%;
+    aspect-ratio: 3 / 2;
+    width: auto; height: auto;
+    touch-action: none;
+    user-select: none; -webkit-user-select: none;
+    outline: none;
+  }
+  .touchbtn {
+    display: none; position: absolute; bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+    width: 92px; height: 92px; border-radius: 50%; border: 3px solid #f5f5f5;
+    color: #fff; font: bold 15px Arial, Helvetica, sans-serif; letter-spacing: .5px;
+    touch-action: none; user-select: none; -webkit-user-select: none; opacity: .85;
+  }
+  #btnBoost { right: 14px; background: #23ebff; color: #08101a; }
+  #btnRocket { left: 14px; background: #ff7d19; color: #08101a; }
+  body.touch .touchbtn { display: block; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <canvas id="c" width="1200" height="800" tabindex="0"></canvas>
+  <button class="touchbtn" id="btnRocket">ROQUETTE</button>
+  <button class="touchbtn" id="btnBoost">BOOST</button>
+</div>
+
+<script>
+"use strict";
+
+// ============================================================
+// HIGHWAY MOUSE 3D - version web (portage du code pygame)
+// ============================================================
+
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+
+const LARGEUR = 1200;
+const HAUTEUR = 800;
+
+if (("ontouchstart" in window) || (window.matchMedia && matchMedia("(pointer: coarse)").matches)) {
+  document.body.classList.add("touch");
+}
+
+// ------------------------------------------------------------
+// COULEURS
+// ------------------------------------------------------------
+const NOIR = [8, 10, 15];
+const BLANC = [245, 245, 245];
+const CIEL = [95, 180, 230];
+const VERT = [38, 150, 68];
+const VERT_FONCE = [27, 115, 52];
+const VERT_CLAIR = [55, 195, 95];
+const ROUTE = [48, 50, 57];
+const ROUTE_CLAIRE = [65, 68, 76];
+const ROUGE = [235, 45, 50];
+const BLEU = [45, 125, 255];
+const BLEU_CLAIR = [100, 200, 255];
+const JAUNE = [255, 210, 45];
+const ORANGE = [255, 125, 25];
+const CYAN = [35, 235, 255];
+const VIOLET = [175, 70, 220];
+const ROSE = [245, 80, 150];
+const GRIS = [100, 105, 115];
+
+// ------------------------------------------------------------
+// OUTILS DE DESSIN (équivalent pygame.draw)
+// ------------------------------------------------------------
+function col(c, a) {
+  if (a === undefined) return "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")";
+  return "rgba(" + c[0] + "," + c[1] + "," + c[2] + "," + (a / 255) + ")";
+}
+function ri(a, b) { return a + Math.floor(Math.random() * (b - a + 1)); }
+function ru(a, b) { return a + Math.random() * (b - a); }
+function choice(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+function clamp(v, mn, mx) { return Math.max(mn, Math.min(mx, v)); }
+function assombrir(c, f = 0.7) { return c.map(v => Math.max(0, Math.min(255, Math.trunc(v * f)))); }
+function eclaircir(c, f = 1.2) { return c.map(v => Math.max(0, Math.min(255, Math.trunc(v * f)))); }
+
+class Rect {
+  constructor(x, y, w, h) { this.x = x; this.y = y; this.w = w; this.h = h; }
+  get centerx() { return this.x + this.w / 2; }
+  get centery() { return this.y + this.h / 2; }
+  get bottom() { return this.y + this.h; }
+  move(dx, dy) { return new Rect(this.x + dx, this.y + dy, this.w, this.h); }
+  collide(px, py) { return px >= this.x && px < this.x + this.w && py >= this.y && py < this.y + this.h; }
+}
+
+function rrPath(x, y, w, h, r) {
+  r = Math.max(0, Math.min(r, w / 2, h / 2));
+  ctx.beginPath();
+  if (r <= 0) { ctx.rect(x, y, w, h); return; }
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.arcTo(x + w, y, x + w, y + r, r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.arcTo(x + w, y + h, x + w - r, y + h, r);
+  ctx.lineTo(x + r, y + h);
+  ctx.arcTo(x, y + h, x, y + h - r, r);
+  ctx.lineTo(x, y + r);
+  ctx.arcTo(x, y, x + r, y, r);
+  ctx.closePath();
+}
+function fillRect(c, x, y, w, h, r = 0, alpha) {
+  ctx.fillStyle = col(c, alpha);
+  if (r > 0) { rrPath(x, y, w, h, r); ctx.fill(); } else { ctx.fillRect(x, y, w, h); }
+}
+function strokeRect(c, x, y, w, h, lw, r = 0) {
+  ctx.strokeStyle = col(c);
+  ctx.lineWidth = lw;
+  const o = lw / 2;
+  rrPath(x + o, y + o, w - lw, h - lw, Math.max(0, r - o));
+  ctx.stroke();
+}
+function fillCircle(c, x, y, r) {
+  ctx.fillStyle = col(c);
+  ctx.beginPath(); ctx.arc(x, y, Math.max(0, r), 0, Math.PI * 2); ctx.fill();
+}
+function strokeCircle(c, x, y, r, lw) {
+  ctx.strokeStyle = col(c); ctx.lineWidth = lw;
+  ctx.beginPath(); ctx.arc(x, y, Math.max(0, r - lw / 2), 0, Math.PI * 2); ctx.stroke();
+}
+function fillEllipse(c, x, y, w, h) {
+  ctx.fillStyle = col(c);
+  ctx.beginPath();
+  ctx.ellipse(x + w / 2, y + h / 2, Math.max(0, w / 2), Math.max(0, h / 2), 0, 0, Math.PI * 2);
+  ctx.fill();
+}
+function fillPoly(c, pts) {
+  ctx.fillStyle = col(c);
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.closePath(); ctx.fill();
+}
+function strokeLine(c, a, b, lw) {
+  ctx.strokeStyle = col(c); ctx.lineWidth = lw; ctx.lineCap = "butt";
+  ctx.beginPath(); ctx.moveTo(a[0], a[1]); ctx.lineTo(b[0], b[1]); ctx.stroke();
+}
+function strokePolyClosed(c, pts, lw) {
+  ctx.strokeStyle = col(c); ctx.lineWidth = lw; ctx.lineJoin = "round";
+  ctx.beginPath();
+  ctx.moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i][0], pts[i][1]);
+  ctx.closePath(); ctx.stroke();
+  ctx.lineJoin = "miter";
+}
+
+// Polices (équivalent pygame.font.Font(None, taille))
+const FONT_PETIT = 30, FONT_NORMAL = 38, FONT_MOYEN = 48, FONT_GRAND = 68, FONT_TITRE = 88;
+function setFont(size) {
+  ctx.font = "bold " + Math.round(size * 0.64) + "px Arial, Helvetica, sans-serif";
+  ctx.textBaseline = "top";
+  ctx.textAlign = "left";
+}
+function textWidth(s, size) { setFont(size); return ctx.measureText(s).width; }
+function textHeight(size) { return Math.round(size * 0.64) * 1.15; }
+function drawText(s, size, c, x, y) {
+  setFont(size);
+  ctx.fillStyle = col(c);
+  ctx.fillText(s, x, y);
+}
+function drawTextCenterX(s, size, c, cx, y) {
+  drawText(s, size, c, cx - textWidth(s, size) / 2, y);
+}
+
+// ------------------------------------------------------------
+// ROUTE
+// ------------------------------------------------------------
+const ROUTE_GAUCHE = 180;
+const ROUTE_DROITE = 1020;
+const ROUTE_LARGEUR = ROUTE_DROITE - ROUTE_GAUCHE;
+const NOMBRE_VOIES = 3;
+const LARGEUR_VOIE = ROUTE_LARGEUR / NOMBRE_VOIES;
+const VOIES = [
+  ROUTE_GAUCHE + LARGEUR_VOIE * 0.5,
+  ROUTE_GAUCHE + LARGEUR_VOIE * 1.5,
+  ROUTE_GAUCHE + LARGEUR_VOIE * 2.5
+];
+const JOUEUR_Y = 650;
+
+// ------------------------------------------------------------
+// VOITURES
+// ------------------------------------------------------------
+const VOITURES = [
+  { nom: "SPORT",   couleur: BLEU,       prix: 0,   forme: "sport",     largeur: 1.00 },
+  { nom: "FIRE",    couleur: ROUGE,      prix: 50,  forme: "sport",     largeur: 0.97 },
+  { nom: "GOLD",    couleur: JAUNE,      prix: 100, forme: "muscle",    largeur: 0.94 },
+  { nom: "NATURE",  couleur: VERT_CLAIR, prix: 150, forme: "compacte",  largeur: 0.91 },
+  { nom: "PURPLE",  couleur: VIOLET,     prix: 200, forme: "sport",     largeur: 0.88 },
+  { nom: "ROSE",    couleur: ROSE,       prix: 250, forme: "arrondie",  largeur: 0.85 },
+  { nom: "ORANGE",  couleur: ORANGE,     prix: 300, forme: "muscle",    largeur: 0.82 },
+  { nom: "CYAN",    couleur: CYAN,       prix: 400, forme: "futuriste", largeur: 0.78 },
+  { nom: "DIAMOND", couleur: BLANC,      prix: 500, forme: "futuriste", largeur: 0.74 }
+];
+
+const DIFFICULTES = [
+  { nom: "FACILE",    vitesse: 0.68, delai: 900, couleur: VERT_CLAIR },
+  { nom: "MOYEN",     vitesse: 0.96, delai: 740, couleur: JAUNE },
+  { nom: "DIFFICILE", vitesse: 1.28, delai: 600, couleur: ORANGE },
+  { nom: "EXTREME",   vitesse: 1.64, delai: 470, couleur: ROUGE }
+];
+let difficulte_libre = 0;
+
+// ------------------------------------------------------------
+// SAUVEGARDE (localStorage, avec repli en mémoire)
+// ------------------------------------------------------------
+const FICHIER_PIECES = "highway3d_pieces";
+const FICHIER_VOITURES = "highway3d_voitures";
+const FICHIER_SELECTION = "highway3d_selection";
+const FICHIER_NIVEAU = "highway3d_niveau";
+const FICHIER_SCORE = "highway3d_score";
+const FICHIER_VIES = "highway3d_vies";
+const FICHIER_ROQUETTES = "highway3d_roquettes";
+
+const PRIX_VIE = 50;
+const PRIX_ROQUETTE = 5;
+
+const memoire = {};
+function lireTexte(cle) {
+  try {
+    const v = localStorage.getItem(cle);
+    if (v !== null) return v;
+  } catch (e) { /* stockage indisponible */ }
+  return (cle in memoire) ? memoire[cle] : null;
+}
+function ecrireTexte(cle, valeur) {
+  memoire[cle] = valeur;
+  try { localStorage.setItem(cle, valeur); } catch (e) { /* ignoré */ }
+}
+function lire_entier(cle, defaut) {
+  const t = lireTexte(cle);
+  if (t === null) return defaut;
+  const n = parseInt(String(t).trim(), 10);
+  return Number.isNaN(n) ? defaut : n;
+}
+function sauvegarder_entier(cle, valeur) { ecrireTexte(cle, String(Math.trunc(valeur))); }
+
+let pieces = Math.max(0, lire_entier(FICHIER_PIECES, 0));
+let niveau_max = Math.max(1, Math.min(10, lire_entier(FICHIER_NIVEAU, 1)));
+let meilleur_score = Math.max(0, lire_entier(FICHIER_SCORE, 0));
+let stock_vies = Math.max(0, lire_entier(FICHIER_VIES, 0));
+let stock_roquettes = Math.max(0, lire_entier(FICHIER_ROQUETTES, 0));
+
+function charger_voitures() {
+  const defaut = VOITURES.map((_, i) => i === 0);
+  const t = lireTexte(FICHIER_VOITURES);
+  if (t === null) return defaut;
+  const valeurs = t.trim().split(",");
+  const res = VOITURES.map((_, i) => i < valeurs.length ? valeurs[i] === "1" : false);
+  res[0] = true;
+  return res;
+}
+let voitures_achetees = charger_voitures();
+function sauvegarder_voitures() {
+  ecrireTexte(FICHIER_VOITURES, voitures_achetees.map(v => v ? "1" : "0").join(","));
+}
+
+let voiture_selectionnee = lire_entier(FICHIER_SELECTION, 0);
+if (voiture_selectionnee < 0 || voiture_selectionnee >= VOITURES.length || !voitures_achetees[voiture_selectionnee]) {
+  voiture_selectionnee = 0;
+}
+
+// ------------------------------------------------------------
+// NIVEAUX / ETATS
+// ------------------------------------------------------------
+const NOMBRE_NIVEAUX = 10;
+const DISTANCES = [1800, 2200, 2700, 3200, 3800, 4400, 5100, 5900, 6800, 7800];
+const MODE_NIVEAUX = 0;
+const MODE_LIBRE = 1;
+let mode_jeu = MODE_NIVEAUX;
+let niveau = 1;
+
+const MENU = 0, GARAGE = 1, SELECTION_LIBRE = 2;
+let etat = MENU;
+let onglet_garage = "voitures";
+let jeu_commence = false;
+let game_over = false;
+let niveau_termine = false;
+
+// ------------------------------------------------------------
+// VARIABLES DU JEU
+// ------------------------------------------------------------
+let obstacles = [];
+let pieces_parcours = [];
+let particules = [];
+let arbres = [];
+
+let score = 0;
+let distance = 0.0;
+let vitesse = 0.68;
+let vitesse_base = 0.68;
+
+const BOOST_MAX = 100.0;
+let boost = BOOST_MAX;
+let boost_actif = false;
+
+let joueur_x = VOIES[1];
+
+let temps_obstacle = 0;
+let temps_piece = 0;
+let delai_obstacle = 800;
+let delai_obstacle_base = 800;
+let delai_piece = 700;
+let invincible_jusqu = 0;
+
+// ------------------------------------------------------------
+// ENTREES
+// ------------------------------------------------------------
+let sourisX = LARGEUR / 2, sourisY = HAUTEUR / 2;
+const touches = { space: false };
+
+function posCanvas(e) {
+  const r = canvas.getBoundingClientRect();
+  return [
+    (e.clientX - r.left) * (LARGEUR / r.width),
+    (e.clientY - r.top) * (HAUTEUR / r.height)
+  ];
+}
+
+// ============================================================
+// DECOR
+// ============================================================
+function creer_arbres() {
+  arbres.length = 0;
+  for (let i = 0; i < 35; i++) {
+    const cote = choice([-1, 1]);
+    arbres.push({
+      x: cote === -1 ? ROUTE_GAUCHE - ri(50, 160) : ROUTE_DROITE + ri(50, 160),
+      y: ri(-100, HAUTEUR + 100),
+      taille: ri(18, 38)
+    });
+  }
+}
+creer_arbres();
+
+function dessiner_fond() {
+  fillRect(CIEL, 0, 0, LARGEUR, HAUTEUR);
+  for (const [x, y, taille] of [[130, 110, 35], [250, 160, 25], [960, 100, 42], [1080, 170, 28]]) {
+    fillCircle([225, 245, 250], x, y, taille);
+    fillCircle([235, 250, 255], x + taille, y + 8, Math.trunc(taille * 0.75));
+  }
+  fillCircle([255, 225, 110], 1060, 80, 45);
+}
+
+function dessiner_herbe() {
+  fillRect(VERT, 0, 0, LARGEUR, HAUTEUR);
+  const decalage = Math.trunc(distance * 1.8) % 80;
+  for (let y = -80; y < HAUTEUR + 80; y += 80) {
+    fillRect(VERT_FONCE, 0, y + decalage, LARGEUR, 3);
+  }
+  for (let i = 0; i < 80; i++) {
+    const x = (i * 97 + 31) % LARGEUR;
+    const y = (i * 53 + Math.trunc(distance * 3)) % HAUTEUR;
+    if (x > ROUTE_GAUCHE && x < ROUTE_DROITE) continue;
+    strokeLine(VERT_CLAIR, [x, y], [x + 2, y - 7], 2);
+  }
+}
+
+function dessiner_route() {
+  fillRect([30, 100, 48], ROUTE_GAUCHE - 14, 0, ROUTE_LARGEUR + 28, HAUTEUR);
+  fillRect(ROUTE, ROUTE_GAUCHE, 0, ROUTE_LARGEUR, HAUTEUR);
+
+  const decalage = Math.trunc(distance * 2.2) % 70;
+  for (let y = -70; y < HAUTEUR + 70; y += 70) {
+    strokeLine(ROUTE_CLAIRE, [ROUTE_GAUCHE + 5, y + decalage], [ROUTE_DROITE - 5, y + decalage], 2);
+  }
+
+  fillRect([245, 205, 45], ROUTE_GAUCHE, 0, 7, HAUTEUR);
+  fillRect([245, 205, 45], ROUTE_DROITE - 7, 0, 7, HAUTEUR);
+
+  const decalage_lignes = Math.trunc(distance * 2.8) % 100;
+  for (const voie of [1, 2]) {
+    const x = Math.trunc(ROUTE_GAUCHE + LARGEUR_VOIE * voie);
+    for (let y = -100; y < HAUTEUR + 100; y += 100) {
+      fillRect([230, 230, 225], x - 5, y + decalage_lignes, 10, 55, 4);
+    }
+  }
+}
+
+function dessiner_arbre(x, y, taille) {
+  fillEllipse([20, 80, 35], x - taille, y + Math.trunc(taille / 2), taille * 2, Math.trunc(taille / 2));
+  fillRect([105, 65, 35], x - Math.max(3, Math.trunc(taille / 6)), y, Math.max(6, Math.trunc(taille / 3)), taille, 4);
+  fillCircle([22, 105, 43], x, y, taille);
+  fillCircle([38, 145, 55], x - Math.trunc(taille / 2), y - Math.trunc(taille / 4), Math.trunc(taille * 0.72));
+  fillCircle([30, 125, 48], x + Math.trunc(taille / 2), y - Math.trunc(taille / 5), Math.trunc(taille * 0.68));
+}
+
+function dessiner_decor() {
+  dessiner_fond();
+  dessiner_herbe();
+  const mouvement = distance * 2.0;
+  for (const arbre of arbres) {
+    const y = ((arbre.y + mouvement) % (HAUTEUR + 250) + (HAUTEUR + 250)) % (HAUTEUR + 250) - 125;
+    dessiner_arbre(arbre.x, Math.trunc(y), arbre.taille);
+  }
+  dessiner_route();
+}
+
+// ============================================================
+// VOITURE
+// ============================================================
+function dessiner_voiture(x, y, couleur, forme = "sport", joueur = false, boostOn = false, taille = 1.0, finesse = 1.0) {
+  const largeur = Math.trunc(82 * taille * finesse);
+  const hauteur = Math.trunc(145 * taille);
+  if (largeur < 10) return;
+
+  fillEllipse([15, 15, 18], Math.trunc(x - largeur * 0.62), Math.trunc(y - hauteur * 0.48), Math.trunc(largeur * 1.24), Math.trunc(hauteur * 0.9));
+
+  if (joueur && boostOn) {
+    for (let i = 0; i < 4; i++) {
+      const bx = x - largeur * 0.30 + i * largeur * 0.20;
+      const longueur = ri(25, 55);
+      fillPoly(choice([ORANGE, JAUNE, CYAN]), [
+        [Math.trunc(bx - 6), Math.trunc(y + hauteur * 0.40)],
+        [Math.trunc(bx), Math.trunc(y + hauteur * 0.40 + longueur)],
+        [Math.trunc(bx + 6), Math.trunc(y + hauteur * 0.40)]
+      ]);
+    }
+  }
+
+  const gauche = Math.trunc(x - largeur / 2);
+  const droite = Math.trunc(x + largeur / 2);
+  const haut = Math.trunc(y - hauteur / 2);
+  const bas = Math.trunc(y + hauteur / 2);
+
+  let points;
+  if (forme === "futuriste") {
+    points = [[Math.trunc(x), haut], [droite - 4, haut + 35], [droite, bas - 22], [Math.trunc(x), bas], [gauche, bas - 22], [gauche + 4, haut + 35]];
+  } else if (forme === "arrondie") {
+    points = [[gauche + 8, bas], [gauche, haut + 38], [gauche + 15, haut + 8], [Math.trunc(x), haut], [droite - 15, haut + 8], [droite, haut + 38], [droite - 8, bas], [Math.trunc(x), bas + 5]];
+  } else if (forme === "muscle") {
+    points = [[gauche, bas], [gauche - 3, haut + 35], [gauche + 15, haut + 5], [droite - 15, haut + 5], [droite + 3, haut + 35], [droite, bas]];
+  } else {
+    points = [[gauche + 7, bas], [gauche, haut + 40], [gauche + 13, haut + 10], [Math.trunc(x), haut], [droite - 13, haut + 10], [droite, haut + 40], [droite - 7, bas]];
+  }
+
+  fillPoly(assombrir(couleur, 0.75), points);
+
+  fillPoly(couleur, [
+    [Math.trunc(x - largeur * 0.37), Math.trunc(haut + hauteur * 0.22)],
+    [Math.trunc(x - largeur * 0.25), Math.trunc(haut + hauteur * 0.08)],
+    [Math.trunc(x + largeur * 0.25), Math.trunc(haut + hauteur * 0.08)],
+    [Math.trunc(x + largeur * 0.37), Math.trunc(haut + hauteur * 0.22)],
+    [Math.trunc(x + largeur * 0.34), Math.trunc(bas - hauteur * 0.10)],
+    [Math.trunc(x), Math.trunc(bas - hauteur * 0.02)],
+    [Math.trunc(x - largeur * 0.34), Math.trunc(bas - hauteur * 0.10)]
+  ]);
+
+  strokePolyClosed([10, 12, 17], points, 4);
+
+  const vitre = [
+    [Math.trunc(x - largeur * 0.25), Math.trunc(haut + hauteur * 0.15)],
+    [Math.trunc(x + largeur * 0.25), Math.trunc(haut + hauteur * 0.15)],
+    [Math.trunc(x + largeur * 0.34), Math.trunc(haut + hauteur * 0.31)],
+    [Math.trunc(x - largeur * 0.34), Math.trunc(haut + hauteur * 0.31)]
+  ];
+  fillPoly([42, 105, 145], vitre);
+  strokeLine([170, 225, 250], vitre[0], vitre[1], 4);
+  strokeLine([120, 205, 245],
+    [Math.trunc(x - largeur * 0.20), Math.trunc(haut + hauteur * 0.18)],
+    [Math.trunc(x + largeur * 0.05), Math.trunc(haut + hauteur * 0.28)], 3);
+
+  fillPoly(eclaircir(couleur, 1.10), [
+    [Math.trunc(x - largeur * 0.35), Math.trunc(haut + hauteur * 0.38)],
+    [Math.trunc(x + largeur * 0.35), Math.trunc(haut + hauteur * 0.38)],
+    [Math.trunc(x + largeur * 0.32), Math.trunc(bas - hauteur * 0.18)],
+    [Math.trunc(x), Math.trunc(bas - hauteur * 0.08)],
+    [Math.trunc(x - largeur * 0.32), Math.trunc(bas - hauteur * 0.18)]
+  ]);
+
+  if (joueur) {
+    fillPoly(BLANC, [
+      [Math.trunc(x - 5 * taille), Math.trunc(haut + hauteur * 0.38)],
+      [Math.trunc(x + 5 * taille), Math.trunc(haut + hauteur * 0.38)],
+      [Math.trunc(x + 4 * taille), Math.trunc(bas - hauteur * 0.10)],
+      [Math.trunc(x - 4 * taille), Math.trunc(bas - hauteur * 0.10)]
+    ]);
+  }
+
+  const roue_largeur = Math.max(8, Math.trunc(13 * taille));
+  const roue_hauteur = Math.max(24, Math.trunc(34 * taille));
+  const positions_roues = [
+    [gauche - Math.trunc(roue_largeur / 2) + 4, haut + Math.trunc(hauteur * 0.24)],
+    [droite - Math.trunc(roue_largeur / 2) - 4, haut + Math.trunc(hauteur * 0.24)],
+    [gauche - Math.trunc(roue_largeur / 2) + 4, bas - Math.trunc(hauteur * 0.29)],
+    [droite - Math.trunc(roue_largeur / 2) - 4, bas - Math.trunc(hauteur * 0.29)]
+  ];
+  for (const [rx, ry] of positions_roues) {
+    fillRect([7, 7, 9], rx, ry, roue_largeur, roue_hauteur, 5);
+    if (taille > 0.55) {
+      fillRect([85, 85, 90],
+        rx + Math.trunc(roue_largeur / 4), ry + Math.trunc(roue_hauteur / 4),
+        Math.max(2, Math.trunc(roue_largeur / 2)), Math.max(4, Math.trunc(roue_hauteur / 2)), 3);
+    }
+  }
+
+  const rayon = Math.max(3, Math.trunc(7 * taille));
+  fillCircle([255, 250, 185], Math.trunc(x - largeur * 0.25), Math.trunc(haut + hauteur * 0.07), rayon);
+  fillCircle([255, 250, 185], Math.trunc(x + largeur * 0.25), Math.trunc(haut + hauteur * 0.07), rayon);
+}
+
+// ============================================================
+// PIECES
+// ============================================================
+function dessiner_piece(x, y) {
+  const rayon = 15;
+  fillCircle([120, 80, 10], Math.trunc(x + 3), Math.trunc(y + 4), rayon);
+  fillCircle(JAUNE, Math.trunc(x), Math.trunc(y), rayon);
+  fillCircle([255, 240, 125], Math.trunc(x - 5), Math.trunc(y - 5), 5);
+  strokeCircle([210, 160, 20], Math.trunc(x), Math.trunc(y), rayon, 3);
+  fillPoly([255, 235, 80], [
+    [x, y - 7], [x + 3, y - 2], [x + 8, y - 2], [x + 4, y + 2], [x + 5, y + 7],
+    [x, y + 4], [x - 5, y + 7], [x - 4, y + 2], [x - 8, y - 2], [x - 3, y - 2]
+  ].map(p => [Math.trunc(p[0]), Math.trunc(p[1])]));
+}
+
+// ============================================================
+// PARTICULES
+// ============================================================
+function creer_particule(x, y, couleur) {
+  particules.push({
+    x: x, y: y,
+    vx: ru(-140, 140), vy: ru(-180, 80),
+    vie: ru(0.25, 0.75),
+    couleur: couleur,
+    taille: ri(3, 8)
+  });
+}
+
+function dessiner_particules(dt) {
+  for (let i = particules.length - 1; i >= 0; i--) {
+    const p = particules[i];
+    p.x += p.vx * dt;
+    p.y += p.vy * dt;
+    p.vy += 250 * dt;
+    p.vie -= dt;
+    if (p.vie <= 0) { particules.splice(i, 1); continue; }
+    const alpha = Math.trunc(clamp(p.vie * 400, 0, 255));
+    ctx.fillStyle = col(p.couleur, alpha);
+    ctx.beginPath(); ctx.arc(Math.trunc(p.x), Math.trunc(p.y), p.taille, 0, Math.PI * 2); ctx.fill();
+  }
+}
+
+// ============================================================
+// OBSTACLES ENTRE LES VOIES
+// ============================================================
+const OBSTACLES_INTERVOIE = ["cone", "barriere", "pneus", "barricade"];
+const POSITIONS_INTERVOIE = [ROUTE_GAUCHE + LARGEUR_VOIE, ROUTE_GAUCHE + LARGEUR_VOIE * 2];
+
+function dessiner_obstacle_intervoie(x, y, type_obstacle, taille = 1.0) {
+  if (type_obstacle === "cone") {
+    const largeur = Math.trunc(42 * taille);
+    const hauteur = Math.trunc(62 * taille);
+    fillEllipse([20, 20, 20], Math.trunc(x - largeur * 0.55), Math.trunc(y + hauteur * 0.25), Math.trunc(largeur * 1.1), Math.trunc(hauteur * 0.28));
+    fillPoly(ORANGE, [
+      [Math.trunc(x), Math.trunc(y - hauteur / 2)],
+      [Math.trunc(x + largeur / 2), Math.trunc(y + hauteur / 2)],
+      [Math.trunc(x - largeur / 2), Math.trunc(y + hauteur / 2)]
+    ]);
+    fillPoly(assombrir(ORANGE, 0.65), [
+      [Math.trunc(x), Math.trunc(y - hauteur / 2)],
+      [Math.trunc(x - largeur / 2), Math.trunc(y + hauteur / 2)],
+      [Math.trunc(x - largeur * 0.12), Math.trunc(y + hauteur / 2)]
+    ]);
+    fillPoly(BLANC, [
+      [Math.trunc(x - largeur * 0.28), Math.trunc(y + hauteur * 0.08)],
+      [Math.trunc(x + largeur * 0.28), Math.trunc(y + hauteur * 0.08)],
+      [Math.trunc(x + largeur * 0.34), Math.trunc(y + hauteur * 0.20)],
+      [Math.trunc(x - largeur * 0.34), Math.trunc(y + hauteur * 0.20)]
+    ]);
+  } else if (type_obstacle === "barriere") {
+    const largeur = Math.trunc(115 * taille);
+    const hauteur = Math.trunc(55 * taille);
+    fillEllipse([20, 20, 20], Math.trunc(x - largeur / 2), Math.trunc(y + hauteur * 0.25), largeur, Math.trunc(hauteur * 0.35));
+    fillRect([70, 70, 75], Math.trunc(x - largeur * 0.40), Math.trunc(y + hauteur * 0.05), Math.trunc(12 * taille), Math.trunc(hauteur * 0.75), 3);
+    fillRect([70, 70, 75], Math.trunc(x + largeur * 0.40 - 12 * taille), Math.trunc(y + hauteur * 0.05), Math.trunc(12 * taille), Math.trunc(hauteur * 0.75), 3);
+    fillRect(ROUGE, Math.trunc(x - largeur / 2), Math.trunc(y - hauteur / 3), largeur, Math.trunc(hauteur * 0.50), 5);
+    for (let i = 0; i < 3; i++) {
+      const bx = x - largeur * 0.40 + i * largeur * 0.40;
+      fillPoly(JAUNE, [
+        [Math.trunc(bx), Math.trunc(y - hauteur / 3)],
+        [Math.trunc(bx + largeur * 0.12), Math.trunc(y - hauteur / 3)],
+        [Math.trunc(bx - largeur * 0.02), Math.trunc(y + hauteur / 6)],
+        [Math.trunc(bx - largeur * 0.14), Math.trunc(y + hauteur / 6)]
+      ]);
+    }
+  } else if (type_obstacle === "pneus") {
+    const rayon = Math.trunc(27 * taille);
+    for (const [dx, dy] of [[-32, 8], [0, -5], [32, 8]]) {
+      const px = Math.trunc(x + dx * taille);
+      const py = Math.trunc(y + dy * taille);
+      fillCircle([8, 8, 10], px, py, rayon);
+      fillCircle([55, 55, 60], px, py, Math.trunc(rayon * 0.48));
+      fillCircle([15, 15, 18], px, py, Math.trunc(rayon * 0.25));
+      fillCircle([95, 95, 100], px - Math.trunc(rayon * 0.25), py - Math.trunc(rayon * 0.25), Math.max(2, Math.trunc(rayon * 0.10)));
+    }
+  } else if (type_obstacle === "barricade") {
+    const largeur = Math.trunc(105 * taille);
+    const hauteur = Math.trunc(75 * taille);
+    fillEllipse([20, 20, 20], Math.trunc(x - largeur / 2), Math.trunc(y + hauteur * 0.20), largeur, Math.trunc(hauteur * 0.30));
+    fillRect([75, 75, 80], Math.trunc(x - largeur * 0.40), Math.trunc(y - hauteur * 0.05), Math.trunc(14 * taille), Math.trunc(hauteur * 0.75));
+    fillRect([75, 75, 80], Math.trunc(x + largeur * 0.27), Math.trunc(y - hauteur * 0.05), Math.trunc(14 * taille), Math.trunc(hauteur * 0.75));
+    fillRect([235, 235, 225], Math.trunc(x - largeur / 2), Math.trunc(y - hauteur / 2), largeur, Math.trunc(hauteur * 0.55), 4);
+    for (let i = -2; i < 3; i++) {
+      const decalage = i * largeur * 0.28;
+      strokeLine(ROUGE,
+        [Math.trunc(x - largeur * 0.25 + decalage), Math.trunc(y - hauteur * 0.48)],
+        [Math.trunc(x - largeur * 0.05 + decalage), Math.trunc(y + hauteur * 0.03)],
+        Math.max(5, Math.trunc(10 * taille)));
+    }
+  }
+}
+
+// ============================================================
+// CREATION D'OBJETS
+// ============================================================
+function creer_obstacle_arbre() {
+  const cote = choice([-1, 1]);
+  const x = cote === -1 ? ri(ROUTE_GAUCHE - 45, ROUTE_GAUCHE + 35) : ri(ROUTE_DROITE - 35, ROUTE_DROITE + 45);
+  obstacles.push({ type: "arbre", x: x, y: -160, taille: ru(0.90, 1.35) });
+}
+
+function creer_obstacle() {
+  if (Math.random() < 0.18) { creer_obstacle_arbre(); return; }
+
+  let obstacle;
+  if (Math.random() < 0.35) {
+    obstacle = {
+      type: "intervoie",
+      x: choice(POSITIONS_INTERVOIE),
+      y: -120,
+      obstacle_type: choice(OBSTACLES_INTERVOIE),
+      taille: ru(0.80, 1.00)
+    };
+  } else {
+    const voie = ri(0, 2);
+    obstacle = {
+      type: "voiture",
+      x: VOIES[voie],
+      y: -180,
+      couleur: choice([ROUGE, BLEU, JAUNE, VIOLET, VERT_CLAIR, ORANGE]),
+      forme: choice(["sport", "muscle", "compacte", "futuriste"]),
+      taille: ru(0.90, 1.08)
+    };
+  }
+  obstacles.push(obstacle);
+}
+
+function creer_piece() {
+  pieces_parcours.push({ x: VOIES[ri(0, 2)], y: -80 });
+}
+
+function voiture_devant() {
+  let candidats = obstacles.filter(o => o.type === "voiture" && Math.abs(o.x - joueur_x) < LARGEUR_VOIE * 0.6 && o.y < JOUEUR_Y);
+  if (candidats.length === 0) {
+    candidats = obstacles.filter(o => o.type === "voiture" && o.y < JOUEUR_Y);
+  }
+  if (candidats.length === 0) return null;
+  return candidats.reduce((a, b) => (b.y > a.y ? b : a));
+}
+
+function utiliser_roquette() {
+  if (stock_roquettes <= 0) return;
+  const cible = voiture_devant();
+  if (cible === null) return;
+  const idx = obstacles.indexOf(cible);
+  if (idx >= 0) obstacles.splice(idx, 1);
+  for (let i = 0; i < 40; i++) {
+    creer_particule(cible.x + ri(-20, 20), cible.y + ri(-20, 20), choice([ORANGE, ROUGE, JAUNE, BLANC]));
+  }
+  stock_roquettes -= 1;
+  sauvegarder_entier(FICHIER_ROQUETTES, stock_roquettes);
+}
+
+// ============================================================
+// INTERFACE
+// ============================================================
+function dessiner_interface() {
+  fillRect([5, 8, 15], 18, 18, 340, 215, 0, 185);
+
+  drawText("SCORE : " + score, FONT_NORMAL, BLANC, 35, 30);
+  drawText("MEILLEUR : " + meilleur_score, FONT_PETIT, JAUNE, 35, 68);
+  drawText("PIECES : " + pieces, FONT_PETIT, JAUNE, 35, 100);
+
+  if (mode_jeu === MODE_LIBRE) {
+    drawText("MODE LIBRE - " + DIFFICULTES[difficulte_libre].nom, FONT_PETIT, CYAN, 35, 132);
+  } else {
+    drawText("NIVEAU " + niveau + " / " + NOMBRE_NIVEAUX, FONT_PETIT, CYAN, 35, 132);
+  }
+
+  drawText("VIES : " + stock_vies + "   ROQUETTES : " + stock_roquettes, FONT_PETIT, ORANGE, 35, 168);
+
+  const largeur = 280, hauteur = 25;
+  const x = LARGEUR - largeur - 30, y = 30;
+
+  fillRect([12, 14, 20], x, y, largeur, hauteur, 12);
+  const remplissage = Math.trunc(largeur * boost / BOOST_MAX);
+  if (remplissage > 0) {
+    fillRect(boost_actif ? CYAN : ORANGE, x, y, remplissage, hauteur, 12);
+  }
+  drawText("BOOST [ESPACE]", FONT_PETIT, BLANC, x, y + 32);
+
+  if (stock_roquettes > 0) {
+    drawText("CLIC GAUCHE : ROQUETTE (" + stock_roquettes + ")", FONT_PETIT, ORANGE, x, y + 60);
+  }
+
+  if (mode_jeu === MODE_NIVEAUX) {
+    const largeur_barre = 420, hauteur_barre = 22;
+    const x_barre = LARGEUR / 2 - largeur_barre / 2;
+    const y_barre = 20;
+    const objectif = DISTANCES[niveau - 1];
+    const progression = clamp(distance / objectif, 0, 1);
+
+    fillRect([10, 12, 18], x_barre, y_barre, largeur_barre, hauteur_barre, 11);
+    const rempl = Math.trunc(largeur_barre * progression);
+    if (rempl > 0) fillRect(CYAN, x_barre, y_barre, rempl, hauteur_barre, 11);
+    strokeRect(BLANC, x_barre, y_barre, largeur_barre, hauteur_barre, 2, 11);
+
+    const pourcentage = Math.trunc(progression * 100);
+    drawTextCenterX("NIVEAU " + niveau + "  -  " + pourcentage + "%", FONT_PETIT, BLANC, LARGEUR / 2, y_barre + hauteur_barre + 5);
+    drawTextCenterX(Math.trunc(distance) + " / " + objectif + " m", FONT_PETIT, CYAN, LARGEUR / 2, y_barre + hauteur_barre + 32);
+  }
+}
+
+// ============================================================
+// BOUTONS
+// ============================================================
+function bouton(texte, r, couleur, couleurTexte = BLANC) {
+  const survole = r.collide(sourisX, sourisY);
+  const cf = survole ? couleur.map(c => Math.min(255, c + 25)) : couleur;
+  const o = r.move(4, 5);
+  fillRect([5, 7, 12], o.x, o.y, o.w, o.h, 14);
+  fillRect(cf, r.x, r.y, r.w, r.h, 14);
+  strokeRect(BLANC, r.x, r.y, r.w, r.h, 2, 14);
+  const w = textWidth(texte, FONT_MOYEN);
+  const h = textHeight(FONT_MOYEN);
+  drawText(texte, FONT_MOYEN, couleurTexte, r.centerx - w / 2, r.centery - h / 2);
+}
+
+// ============================================================
+// MENU
+// ============================================================
+function afficher_menu() {
+  dessiner_decor();
+  fillRect([0, 0, 0], 0, 0, LARGEUR, HAUTEUR, 0, 155);
+
+  drawTextCenterX("HIGHWAY MOUSE", FONT_TITRE, CYAN, LARGEUR / 2, 25);
+  drawTextCenterX("3D TURBO", FONT_MOYEN, JAUNE, LARGEUR / 2, 105);
+  drawTextCenterX("PIECES : " + pieces, FONT_MOYEN, JAUNE, LARGEUR / 2, 165);
+
+  const bouton_garage = new Rect(35, 35, 190, 65);
+  bouton("GARAGE", bouton_garage, VIOLET);
+
+  const bouton_libre = new Rect(LARGEUR - 260, 125, 225, 65);
+  bouton("MODE LIBRE", bouton_libre, VERT_CLAIR);
+
+  drawTextCenterX("CHOISIS TON NIVEAU", FONT_MOYEN, BLANC, LARGEUR / 2, 235);
+  drawTextCenterX(niveau_max + " / " + NOMBRE_NIVEAUX + " niveaux debloques", FONT_PETIT, JAUNE, LARGEUR / 2, 275);
+
+  const boutons_niveaux = [];
+  const largeur = 155, hauteur = 75;
+  const espacement_x = 175, espacement_y = 90, depart_y = 315;
+
+  for (let i = 0; i < NOMBRE_NIVEAUX; i++) {
+    const numero = i + 1;
+    const ligne = Math.floor(i / 5);
+    const colonne = i % 5;
+    const centre_x = LARGEUR / 2 - 2 * espacement_x + colonne * espacement_x;
+    const y = depart_y + ligne * espacement_y;
+    const r = new Rect(centre_x - Math.floor(largeur / 2), y, largeur, hauteur);
+
+    if (numero <= niveau_max) {
+      bouton("NIVEAU " + numero, r, numero === niveau ? BLEU : ROUTE_CLAIRE);
+      boutons_niveaux.push([r, numero]);
+    } else {
+      fillRect([25, 25, 32], r.x, r.y, r.w, r.h, 14);
+      strokeRect([80, 80, 90], r.x, r.y, r.w, r.h, 2, 14);
+      const w = textWidth("VERROUILLE", FONT_PETIT);
+      drawText("VERROUILLE", FONT_PETIT, [130, 130, 140], r.centerx - w / 2, r.centery - textHeight(FONT_PETIT) / 2);
+    }
+  }
+
+  drawTextCenterX("Souris : diriger | ESPACE : boost | Clic gauche : roquette", FONT_PETIT, CYAN, LARGEUR / 2, 520);
+
+  return { boutons_niveaux, bouton_garage, bouton_libre };
+}
+
+// ============================================================
+// SELECTION DIFFICULTE
+// ============================================================
+function afficher_selection_libre() {
+  dessiner_decor();
+  fillRect([0, 0, 0], 0, 0, LARGEUR, HAUTEUR, 0, 190);
+
+  drawTextCenterX("MODE LIBRE", FONT_GRAND, CYAN, LARGEUR / 2, 70);
+  drawTextCenterX("Choisis ta difficulte (vitesse)", FONT_NORMAL, BLANC, LARGEUR / 2, 150);
+
+  const boutons = [];
+  const largeur_bouton = 250, hauteur_bouton = 120, espace = 30;
+  const nombre = DIFFICULTES.length;
+  const largeur_totale = nombre * largeur_bouton + (nombre - 1) * espace;
+  const depart_x = Math.floor(LARGEUR / 2 - largeur_totale / 2);
+  const y = 290;
+
+  DIFFICULTES.forEach((diff, i) => {
+    const x = depart_x + i * (largeur_bouton + espace);
+    const r = new Rect(Math.trunc(x), y, largeur_bouton, hauteur_bouton);
+    bouton(diff.nom, r, diff.couleur);
+    const mult = Math.round(diff.vitesse / DIFFICULTES[0].vitesse * 10) / 10;
+    const s = "Vitesse x" + (Number.isInteger(mult) ? mult.toFixed(1) : String(mult));
+    drawTextCenterX(s, FONT_PETIT, BLANC, r.centerx, r.bottom + 10);
+    boutons.push([r, i]);
+  });
+
+  const bouton_retour = new Rect(LARGEUR / 2 - 160, 480, 320, 55);
+  bouton("RETOUR", bouton_retour, ROUTE_CLAIRE);
+
+  return { boutons, bouton_retour };
+}
+
+// ============================================================
+// GARAGE
+// ============================================================
+function dessiner_entete_garage() {
+  dessiner_decor();
+  fillRect([0, 0, 0], 0, 0, LARGEUR, HAUTEUR, 0, 215);
+
+  drawTextCenterX("GARAGE", FONT_GRAND, CYAN, LARGEUR / 2, 10);
+  drawTextCenterX("PIECES : " + pieces, FONT_MOYEN, JAUNE, LARGEUR / 2, 68);
+
+  const tab_v = new Rect(LARGEUR / 2 - 240, 118, 230, 50);
+  const tab_a = new Rect(LARGEUR / 2 + 10, 118, 230, 50);
+
+  bouton("VOITURES", tab_v, onglet_garage === "voitures" ? BLEU : ROUTE_CLAIRE);
+  bouton("AIDES", tab_a, onglet_garage === "aides" ? BLEU : ROUTE_CLAIRE);
+
+  return { tab_v, tab_a };
+}
+
+function afficher_garage_voitures() {
+  const { tab_v, tab_a } = dessiner_entete_garage();
+  const boutons_voitures = [];
+
+  const largeur_carte = 220, hauteur_carte = 150;
+  const espacement_x = 250, espacement_y = 160, depart_y = 185;
+
+  VOITURES.forEach((voiture, i) => {
+    const ligne = Math.floor(i / 3);
+    const colonne = i % 3;
+    const centre_x = LARGEUR / 2 - espacement_x + colonne * espacement_x;
+    const y = depart_y + ligne * espacement_y;
+    const r = new Rect(centre_x - Math.floor(largeur_carte / 2), y, largeur_carte, hauteur_carte);
+
+    const achetee = voitures_achetees[i];
+    const selectionnee = (i === voiture_selectionnee);
+
+    let fond, bordure;
+    if (selectionnee) { fond = [30, 65, 80]; bordure = CYAN; }
+    else if (achetee) { fond = [28, 28, 38]; bordure = voiture.couleur; }
+    else { fond = [20, 20, 27]; bordure = [75, 75, 85]; }
+
+    fillRect(fond, r.x, r.y, r.w, r.h, 16);
+    strokeRect(bordure, r.x, r.y, r.w, r.h, 3, 16);
+
+    dessiner_voiture(r.centerx, r.y + 55, voiture.couleur, voiture.forme, false, false, 0.48, voiture.largeur);
+
+    drawTextCenterX(voiture.nom, FONT_NORMAL, voiture.couleur, r.centerx, r.y + 92);
+
+    const finesse = voiture.largeur;
+    if (finesse < 1.0) {
+      const bonus = Math.round((1.0 - finesse) * 100);
+      drawTextCenterX("CARROSSERIE +" + bonus + "% FINE", FONT_PETIT, CYAN, r.centerx, r.y + 114);
+    }
+
+    let texte, couleur_texte;
+    if (selectionnee) { texte = "SELECTIONNEE"; couleur_texte = CYAN; }
+    else if (achetee) { texte = "CLIQUER POUR UTILISER"; couleur_texte = BLANC; }
+    else { texte = voiture.prix + " PIECES"; couleur_texte = JAUNE; }
+    drawTextCenterX(texte, FONT_PETIT, couleur_texte, r.centerx, r.y + 133);
+
+    boutons_voitures.push([r, i]);
+  });
+
+  const bouton_retour = new Rect(LARGEUR / 2 - 160, 705, 320, 50);
+  bouton("RETOUR", bouton_retour, ROUTE_CLAIRE);
+
+  return { boutons_voitures, bouton_retour, tab_v, tab_a };
+}
+
+function afficher_garage_aides() {
+  const { tab_v, tab_a } = dessiner_entete_garage();
+
+  drawTextCenterX("Achete avec tes pieces - utilisables pendant la course", FONT_PETIT, BLANC, LARGEUR / 2, 182);
+
+  const cartes = [
+    { id: "vie", nom: "DEUXIEME VIE", prix: PRIX_VIE, stock: stock_vies,
+      desc1: "Survis a une collision", desc2: "(utilisee automatiquement)", couleur: CYAN },
+    { id: "roquette", nom: "ROQUETTE", prix: PRIX_ROQUETTE, stock: stock_roquettes,
+      desc1: "Detruit la voiture devant toi", desc2: "(clic gauche pendant la course)", couleur: ORANGE }
+  ];
+
+  const largeur_carte = 480, hauteur_carte = 340, espace = 40;
+  const largeur_totale = 2 * largeur_carte + espace;
+  const depart_x = LARGEUR / 2 - largeur_totale / 2;
+  const y = 225;
+  const boutons_aides = [];
+
+  cartes.forEach((carte, i) => {
+    const x = depart_x + i * (largeur_carte + espace);
+    const r = new Rect(Math.trunc(x), y, largeur_carte, hauteur_carte);
+
+    fillRect([26, 26, 34], r.x, r.y, r.w, r.h, 18);
+    strokeRect(carte.couleur, r.x, r.y, r.w, r.h, 3, 18);
+
+    drawTextCenterX(carte.nom, FONT_GRAND, carte.couleur, r.centerx, r.y + 25);
+    drawTextCenterX(carte.desc1, FONT_NORMAL, BLANC, r.centerx, r.y + 100);
+    drawTextCenterX(carte.desc2, FONT_PETIT, [200, 200, 205], r.centerx, r.y + 140);
+    drawTextCenterX("EN STOCK : " + carte.stock, FONT_MOYEN, JAUNE, r.centerx, r.y + 180);
+
+    const peut_acheter = pieces >= carte.prix;
+    const bouton_achat = new Rect(r.x + 40, r.bottom - 80, largeur_carte - 80, 60);
+    bouton("ACHETER - " + carte.prix + " PIECES", bouton_achat, peut_acheter ? VERT_CLAIR : GRIS);
+    boutons_aides.push([bouton_achat, carte.id, carte.prix]);
+  });
+
+  const bouton_retour = new Rect(LARGEUR / 2 - 160, 705, 320, 50);
+  bouton("RETOUR", bouton_retour, ROUTE_CLAIRE);
+
+  return { boutons_aides, bouton_retour, tab_v, tab_a };
+}
+
+// ============================================================
+// JEU
+// ============================================================
+function recommencer() {
+  obstacles.length = 0;
+  pieces_parcours.length = 0;
+  particules.length = 0;
+
+  score = 0;
+  distance = 0.0;
+
+  if (mode_jeu === MODE_NIVEAUX) {
+    vitesse_base = Math.min(1.90, 0.68 + (niveau - 1) * 0.064);
+    delai_obstacle_base = Math.max(380, 800 - (niveau - 1) * 38);
+  } else {
+    const diff = DIFFICULTES[difficulte_libre];
+    vitesse_base = diff.vitesse;
+    delai_obstacle_base = diff.delai;
+  }
+
+  vitesse = vitesse_base;
+  boost = BOOST_MAX;
+  boost_actif = false;
+  joueur_x = VOIES[1];
+  game_over = false;
+  niveau_termine = false;
+  invincible_jusqu = 0;
+
+  temps_obstacle = performance.now();
+  temps_piece = performance.now();
+  delai_obstacle = delai_obstacle_base;
+  delai_piece = 700;
+}
+
+function lancer_niveau(numero) {
+  if (numero > niveau_max) return;
+  niveau = numero;
+  mode_jeu = MODE_NIVEAUX;
+  jeu_commence = true;
+  recommencer();
+}
+
+function lancer_libre(index = 0) {
+  difficulte_libre = Math.trunc(clamp(index, 0, DIFFICULTES.length - 1));
+  mode_jeu = MODE_LIBRE;
+  niveau = 1;
+  jeu_commence = true;
+  recommencer();
+}
+
+function debloquer() {
+  if (niveau >= niveau_max && niveau < NOMBRE_NIVEAUX) {
+    niveau_max = niveau + 1;
+    sauvegarder_entier(FICHIER_NIVEAU, niveau_max);
+  }
+}
+
+// ============================================================
+// GAME OVER / VICTOIRE
+// ============================================================
+const R_RECOMMENCER = new Rect(LARGEUR / 2 - 190, 400, 380, 65);
+const R_MENU_GO = new Rect(LARGEUR / 2 - 190, 490, 380, 60);
+const R_SUIVANT = new Rect(LARGEUR / 2 - 190, 390, 380, 65);
+
+function afficher_game_over() {
+  fillRect([0, 0, 0], 0, 0, LARGEUR, HAUTEUR, 0, 195);
+  drawTextCenterX("GAME OVER", FONT_GRAND, ROUGE, LARGEUR / 2, 190);
+  drawTextCenterX("Score : " + score, FONT_MOYEN, BLANC, LARGEUR / 2, 290);
+  bouton("RECOMMENCER", R_RECOMMENCER, BLEU);
+  bouton("MENU", R_MENU_GO, ROUTE_CLAIRE);
+}
+
+function afficher_victoire() {
+  fillRect([0, 20, 30], 0, 0, LARGEUR, HAUTEUR, 0, 195);
+  const titre = niveau >= NOMBRE_NIVEAUX ? "VICTOIRE !" : "NIVEAU " + niveau + " TERMINE !";
+  drawTextCenterX(titre, FONT_GRAND, JAUNE, LARGEUR / 2, 190);
+  drawTextCenterX("Score : " + score, FONT_MOYEN, BLANC, LARGEUR / 2, 295);
+  if (niveau < NOMBRE_NIVEAUX) bouton("NIVEAU SUIVANT", R_SUIVANT, BLEU);
+  bouton("MENU", R_MENU_GO, ROUTE_CLAIRE);
+}
+
+// ============================================================
+// DESSIN DE LA SCENE
+// ============================================================
+function dessiner_obstacle(o) {
+  if (o.type === "intervoie") {
+    dessiner_obstacle_intervoie(o.x, o.y, o.obstacle_type, o.taille);
+  } else if (o.type === "arbre") {
+    dessiner_arbre(o.x, Math.trunc(o.y), Math.trunc(32 * o.taille));
+  } else {
+    dessiner_voiture(o.x, o.y, o.couleur, o.forme, false, false, o.taille);
+  }
+}
+
+function dessiner_joueur(avecBoost) {
+  const v = VOITURES[voiture_selectionnee];
+  dessiner_voiture(joueur_x, JOUEUR_Y, v.couleur, v.forme, true, avecBoost, 1.0, v.largeur);
+}
+
+function scene_figee(dt) {
+  dessiner_decor();
+  for (const o of [...obstacles].sort((a, b) => a.y - b.y)) dessiner_obstacle(o);
+  dessiner_joueur(false);
+  dessiner_particules(dt);
+  dessiner_interface();
+}
+
+// ============================================================
+// ENTREES : CLICS
+// ============================================================
+let ui = { menu: null, libre: null, garage: null };
+
+function gererClic(px, py, bouton_souris, pointeurTactile) {
+  sourisX = px; sourisY = py;
+
+  if (!jeu_commence) {
+    if (etat === MENU) {
+      const m = ui.menu || afficher_menu();
+      for (const [r, numero] of m.boutons_niveaux) {
+        if (r.collide(px, py)) { lancer_niveau(numero); return; }
+      }
+      if (m.bouton_garage.collide(px, py)) { etat = GARAGE; onglet_garage = "voitures"; }
+      else if (m.bouton_libre.collide(px, py)) { etat = SELECTION_LIBRE; }
+    } else if (etat === SELECTION_LIBRE) {
+      const m = ui.libre || afficher_selection_libre();
+      for (const [r, index] of m.boutons) {
+        if (r.collide(px, py)) { lancer_libre(index); return; }
+      }
+      if (m.bouton_retour.collide(px, py)) etat = MENU;
+    } else if (etat === GARAGE) {
+      const g = ui.garage;
+      if (!g) return;
+      if (g.tab_v.collide(px, py)) onglet_garage = "voitures";
+      else if (g.tab_a.collide(px, py)) onglet_garage = "aides";
+      else if (g.bouton_retour.collide(px, py)) etat = MENU;
+      else if (onglet_garage === "voitures" && g.boutons_voitures) {
+        for (const [r, index] of g.boutons_voitures) {
+          if (r.collide(px, py)) {
+            if (voitures_achetees[index]) {
+              voiture_selectionnee = index;
+              sauvegarder_entier(FICHIER_SELECTION, voiture_selectionnee);
+            } else {
+              const prix = VOITURES[index].prix;
+              if (pieces >= prix) {
+                pieces -= prix;
+                voitures_achetees[index] = true;
+                voiture_selectionnee = index;
+                sauvegarder_entier(FICHIER_PIECES, pieces);
+                sauvegarder_voitures();
+                sauvegarder_entier(FICHIER_SELECTION, voiture_selectionnee);
+              }
+            }
+            break;
+          }
+        }
+      } else if (onglet_garage === "aides" && g.boutons_aides) {
+        for (const [r, id_aide, prix] of g.boutons_aides) {
+          if (r.collide(px, py)) {
+            if (pieces >= prix) {
+              pieces -= prix;
+              if (id_aide === "vie") {
+                stock_vies += 1;
+                sauvegarder_entier(FICHIER_VIES, stock_vies);
+              } else {
+                stock_roquettes += 1;
+                sauvegarder_entier(FICHIER_ROQUETTES, stock_roquettes);
+              }
+              sauvegarder_entier(FICHIER_PIECES, pieces);
+            }
+            break;
+          }
+        }
+      }
+    }
+  } else if (game_over) {
+    if (R_RECOMMENCER.collide(px, py)) recommencer();
+    else if (R_MENU_GO.collide(px, py)) { jeu_commence = false; etat = MENU; }
+  } else if (niveau_termine) {
+    if (R_MENU_GO.collide(px, py)) { jeu_commence = false; etat = MENU; }
+    else if (niveau < NOMBRE_NIVEAUX && R_SUIVANT.collide(px, py)) {
+      debloquer();
+      niveau += 1;
+      recommencer();
+    }
+  } else {
+    if (bouton_souris === 0 && !pointeurTactile) utiliser_roquette();
+  }
+}
+
+canvas.addEventListener("pointermove", (e) => {
+  const p = posCanvas(e);
+  sourisX = p[0]; sourisY = p[1];
+});
+canvas.addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+  canvas.focus();
+  const p = posCanvas(e);
+  gererClic(p[0], p[1], e.button, e.pointerType === "touch");
+});
+canvas.addEventListener("contextmenu", (e) => e.preventDefault());
+
+window.addEventListener("keydown", (e) => {
+  if (e.code === "Space") { touches.space = true; e.preventDefault(); }
+});
+window.addEventListener("keyup", (e) => {
+  if (e.code === "Space") { touches.space = false; e.preventDefault(); }
+});
+window.addEventListener("blur", () => { touches.space = false; });
+
+// Boutons tactiles
+const btnBoost = document.getElementById("btnBoost");
+const btnRocket = document.getElementById("btnRocket");
+btnBoost.addEventListener("pointerdown", (e) => { e.preventDefault(); touches.space = true; });
+["pointerup", "pointercancel", "pointerleave"].forEach(t => btnBoost.addEventListener(t, () => { touches.space = false; }));
+btnRocket.addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  if (jeu_commence && !game_over && !niveau_termine) utiliser_roquette();
+});
+
+// ============================================================
+// BOUCLE PRINCIPALE
+// ============================================================
+let dernier = performance.now();
+
+function frame(now) {
+  requestAnimationFrame(frame);
+
+  let dt = (now - dernier) / 1000.0;
+  dernier = now;
+  if (!(dt > 0)) return;
+  dt = Math.min(dt, 0.05);
+
+  // ---- Menus ----
+  if (!jeu_commence) {
+    if (etat === MENU) {
+      ui.menu = afficher_menu();
+    } else if (etat === SELECTION_LIBRE) {
+      ui.libre = afficher_selection_libre();
+    } else {
+      ui.garage = (onglet_garage === "voitures") ? afficher_garage_voitures() : afficher_garage_aides();
+    }
+    return;
+  }
+
+  // ---- Game over ----
+  if (game_over) {
+    scene_figee(dt);
+    afficher_game_over();
+    return;
+  }
+
+  // ---- Niveau terminé ----
+  if (niveau_termine) {
+    scene_figee(dt);
+    afficher_victoire();
+    return;
+  }
+
+  // ---- Jeu ----
+  boost_actif = touches.space && boost > 0;
+
+  const cible_x = clamp(sourisX, ROUTE_GAUCHE + 55, ROUTE_DROITE - 55);
+  const difference = cible_x - joueur_x;
+  const vitesse_direction = boost_actif ? 13.0 : 10.0;
+  joueur_x += difference * vitesse_direction * dt;
+  joueur_x = clamp(joueur_x, ROUTE_GAUCHE + 50, ROUTE_DROITE - 50);
+
+  let vitesse_actuelle;
+  if (boost_actif) {
+    boost -= 40 * dt;
+    boost = Math.max(0, boost);
+    vitesse_actuelle = vitesse * 1.75;
+    if (Math.random() < 0.8) {
+      creer_particule(joueur_x + ri(-25, 25), JOUEUR_Y + 65, choice([ORANGE, JAUNE, CYAN]));
+    }
+  } else {
+    boost += 10 * dt;
+    boost = Math.min(BOOST_MAX, boost);
+    vitesse_actuelle = vitesse;
+  }
+
+  distance += vitesse_actuelle * 60 * dt;
+
+  if (mode_jeu === MODE_NIVEAUX) {
+    const objectif = DISTANCES[niveau - 1];
+    if (distance >= objectif) {
+      distance = objectif;
+      niveau_termine = true;
+      boost_actif = false;
+      debloquer();
+      if (score > meilleur_score) {
+        meilleur_score = score;
+        sauvegarder_entier(FICHIER_SCORE, meilleur_score);
+      }
+    }
+  }
+
+  const maintenant = performance.now();
+
+  if (maintenant - temps_obstacle > delai_obstacle) {
+    creer_obstacle();
+    temps_obstacle = maintenant;
+    delai_obstacle = Math.max(340, delai_obstacle_base - score * 4);
+  }
+
+  if (maintenant - temps_piece > delai_piece) {
+    creer_piece();
+    temps_piece = maintenant;
+    delai_piece = ri(550, 950);
+  }
+
+  const finesse_joueur = VOITURES[voiture_selectionnee].largeur;
+  const seuil_collision_x = 62 * finesse_joueur;
+
+  for (const obstacle of obstacles.slice()) {
+    obstacle.y += vitesse_actuelle * 450 * dt;
+
+    const distance_x = Math.abs(obstacle.x - joueur_x);
+    const distance_y = Math.abs(obstacle.y - JOUEUR_Y);
+
+    let seuil_obs, seuil_y;
+    if (obstacle.type === "intervoie") {
+      seuil_obs = 48; seuil_y = 75;
+    } else if (obstacle.type === "arbre") {
+      seuil_obs = Math.trunc(48 * obstacle.taille);
+      seuil_y = Math.trunc(82 * obstacle.taille);
+    } else {
+      seuil_obs = seuil_collision_x; seuil_y = 105;
+    }
+
+    if (distance_x < seuil_obs && distance_y < seuil_y && maintenant >= invincible_jusqu) {
+      if (stock_vies > 0) {
+        stock_vies -= 1;
+        sauvegarder_entier(FICHIER_VIES, stock_vies);
+        invincible_jusqu = maintenant + 1600;
+        boost_actif = false;
+        const idx = obstacles.indexOf(obstacle);
+        if (idx >= 0) obstacles.splice(idx, 1);
+        for (let i = 0; i < 35; i++) {
+          creer_particule(joueur_x + ri(-40, 40), JOUEUR_Y + ri(-60, 60), choice([CYAN, BLANC, BLEU_CLAIR]));
+        }
+        break;
+      } else {
+        game_over = true;
+        boost_actif = false;
+        for (let i = 0; i < 65; i++) {
+          creer_particule(joueur_x + ri(-45, 45), JOUEUR_Y + ri(-65, 65), choice([ORANGE, JAUNE, ROUGE, BLANC]));
+        }
+        if (score > meilleur_score) {
+          meilleur_score = score;
+          sauvegarder_entier(FICHIER_SCORE, meilleur_score);
+        }
+        break;
+      }
+    }
+
+    if (obstacle.y > HAUTEUR + 180) {
+      const idx = obstacles.indexOf(obstacle);
+      if (idx >= 0) obstacles.splice(idx, 1);
+      score += 1;
+      vitesse = Math.min(1.90, vitesse_base + score * 0.009);
+      if (score > meilleur_score) {
+        meilleur_score = score;
+        sauvegarder_entier(FICHIER_SCORE, meilleur_score);
+      }
+    }
+  }
+
+  for (const piece of pieces_parcours.slice()) {
+    piece.y += vitesse_actuelle * 450 * dt;
+
+    const distance_x = Math.abs(piece.x - joueur_x);
+    const distance_y = Math.abs(piece.y - JOUEUR_Y);
+
+    if (distance_x < 60 && distance_y < 90) {
+      pieces += 1;
+      sauvegarder_entier(FICHIER_PIECES, pieces);
+      for (let i = 0; i < 12; i++) {
+        creer_particule(joueur_x + ri(-30, 30), JOUEUR_Y + ri(-40, 40), JAUNE);
+      }
+      const idx = pieces_parcours.indexOf(piece);
+      if (idx >= 0) pieces_parcours.splice(idx, 1);
+      continue;
+    }
+
+    if (piece.y > HAUTEUR + 100) {
+      const idx = pieces_parcours.indexOf(piece);
+      if (idx >= 0) pieces_parcours.splice(idx, 1);
+    }
+  }
+
+  // ---- Dessin ----
+  dessiner_decor();
+
+  const objets = [];
+  for (const o of obstacles) objets.push([o.y, o.type, o]);
+  for (const p of pieces_parcours) objets.push([p.y, "piece", p]);
+  objets.sort((a, b) => a[0] - b[0]);
+
+  for (const [, type_objet, objet] of objets) {
+    if (type_objet === "piece") dessiner_piece(objet.x, objet.y);
+    else dessiner_obstacle(objet);
+  }
+
+  dessiner_joueur(boost_actif);
+  dessiner_particules(dt);
+  dessiner_interface();
+}
+
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
